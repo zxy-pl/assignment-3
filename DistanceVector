@@ -166,7 +166,7 @@ def simulate_dv(routers):
         # broadcast with Poisoned Reverse
         for sender in routers.values():
             for nei in sender.neighbors:
-                sender_vec = sender.send_vector(nei)        
+                sender_vec = sender.send_vector(None)        
                 routers[nei].received_vectors[sender.name] = sender_vec
 
         stable = True
