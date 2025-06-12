@@ -1,0 +1,202 @@
+#!/usr/bin/env python3
+import sys
+from collections import defaultdict
+from copy import deepcopy
+
+INF = float('inf')
+
+class Router:
+    def __init__(self, name):  #each router has seperate name, neighbour, table, received
+        self.name = name
+        self.neighbors = {}  #  cost
+        self.dv_table = {}   # "destination" : ("next_hop", cost)
+        self.received_vectors = {}  # neighbors' dv tables
+    
+    # ============================Input Parsing=========================================== 
+    
+    """Read input in a standard way and split it into nodes, edges and updates ."""
+    @staticmethod
+    def parse_input():    # start, update, end
+        lines = []        #read not empty input 
+        for line in sys.stdin:
+            line = line.strip()
+            if line:              
+                lines.append(line)
+
+        nodes, edges, updates = [], [], []
+        mode = 'nodes'
+        for line in lines:
+            if line == 'START':
+                mode = 'edges'
+            elif line == 'UPDATE':
+                mode = 'updates'
+            elif line == 'END':
+                break
+            else:
+                if mode == 'nodes':
+                    nodes.append(line)
+                elif mode == 'edges':
+                    u, v, w = line.split()   #u:start, v:end, w:cost
+                    edges.append((u, v, int(w)))
+                    edges.append((v, u, int(w)))
+                elif mode == 'updates':
+                    u, v, w = line.split()
+                    updates.append((u, v, int(w)))
+                    updates.append((v, u, int(w)))
+                    for node in (u, v):
+                        if node not in nodes:
+                            nodes.append(node)
+        return nodes, edges, updates
+    # ======================= Initialisation ============================
+    """ Use direct link costs to fill `dv_table`. If indirect use 'INF' """
+    def initialize(self, nodes):  # dv_table： if exist continue, else “INF”
+        for node in nodes:
+            if node == self.name:
+                continue
+            if node in self.neighbors:   
+                self.dv_table[node] = (node, self.neighbors[node])   #self.neighbors[node]: cost
+            else:
+                self.dv_table[node] = (None, INF)   # not exist: "INF"
+
+    # ===================== Send Distance Vector =======================
+    """Build the distance vector information that the router will send to the
+        neighbour 
+    """
+    def send_vector(self, to_nei=None):
+        vector = {}
+        for dest in self.dv_table:    # "destination" : ("next_hop", cost)
+            next_hop, cost = self.dv_table[dest]
+            if to_nei is not None and next_hop == to_nei and dest != to_nei:
+                vector[dest] = INF
+            else:
+                vector[dest] = cost
+        return vector
+    # ==========================Update the DV Table============================================= #
+    """
+        For every neighbour, calculate
+                cost(x to nei) + noticed_cost(nei to dest)
+        and keep the shortest one; save that neighbour as the new next-hop.
+
+        If any destination cost changes compared with the previous iteration, return True and the main loop
+        the network still need to be update.
+    """
+    def renew_vector(self):    #update orginal table
+        changed = False
+        new_table = {}   #new one
+        for dest in sorted(self.dv_table):
+            if dest == self.name:    
+                continue      #skip self
+
+            if dest in self.neighbors:               # direct neighbour
+                min_cost = self.neighbors[dest]
+                next_hop = dest
+            else:
+                min_cost = INF
+                next_hop = None
+
+            for neighbor in sorted(self.neighbors):
+                cost_to_neighbor = self.neighbors[neighbor]
+                if neighbor in self.received_vectors and dest in self.received_vectors[neighbor]:
+                    nei_cost = self.received_vectors[neighbor][dest]
+                    total_cost = cost_to_neighbor + nei_cost
+                    if total_cost < min_cost:
+                        min_cost = total_cost
+                        next_hop = neighbor     #update the min cost
+            if min_cost != self.dv_table[dest][1]:
+                changed = True
+            new_table[dest] = (next_hop, min_cost)
+        self.dv_table = new_table
+        return changed
+
+    # =================== Distance Table of router ===================
+    def print_distance_table(self, nodes, t):
+        print(f"Distance Table of router {self.name} at t={t}:") # Distance Table of router X at t=0:
+        other_routers = sorted([n for n in nodes if n != self.name]) #print other routers in order
+        print("     " + "  ".join(other_routers))
+        for via_router  in other_routers:      
+            costs_via_router = []
+            for dest_router in other_routers:
+                next_hop, cost = self.dv_table[dest_router]   # get information from other routers
+                if next_hop == via_router :
+                    costs_via_router.append("INF" if cost == INF else str(cost))
+                else:
+                    costs_via_router.append("INF")
+            print(f"{via_router }    " + "  ".join(costs_via_router))
+        print()
+        # ======================  Routing Table ======================
+    def print_routing_table(self):
+        print(f"Routing Table of router {self.name}:") #Routing Table of router X:
+        for dest in sorted(self.dv_table):
+            next_hop, cost = self.dv_table[dest]
+            if cost == INF:
+                print(f"{dest},INF,INF")
+            else:
+                print(f"{dest},{next_hop},{cost}")
+        print()
+
+# ======================  Routing Table ======================
+def build_topology(nodes, edges): # u: start v:dest w:cost
+    routers = {name: Router(name) for name in nodes}
+    for u, v, w in edges:
+        if w == -1:  #delete
+            routers[u].neighbors.pop(v, None)
+            routers[v].neighbors.pop(u, None)
+        else:   
+            routers[u].neighbors[v] = w
+            routers[v].neighbors[u] = w
+    return routers
+
+# ========================= Simulation Driver ===================================== #
+""" Run DV iterations until all routers converge.
+    """
+def simulate_dv(routers):
+    nodes = sorted(routers.keys())
+    for r in routers.values():  #initialize tables
+        r.initialize(nodes)
+    t = 0
+    stable = False
+    while not stable:
+        for r in routers.values():
+            r.print_distance_table(nodes, t)  #print direct information
+
+        # clear old vectors to avoide 
+        for r in routers.values():
+            r.received_vectors = {}
+
+        # broadcast with Poisoned Reverse
+        for sender in routers.values():
+            for nei in sender.neighbors:
+                sender_vec = sender.send_vector(nei)        
+                routers[nei].received_vectors[sender.name] = sender_vec
+
+        stable = True
+        for r in routers.values():
+            changed = r.renew_vector()
+            if changed:
+                stable = False
+        t += 1
+
+    for r in routers.values():
+        r.print_routing_table()
+# =============================== apply updates ============================================ #
+
+def apply_updates(routers, updates):
+    for u, v, w in updates: # u:start, v:dest, w:cost
+        if u not in routers:
+            routers[u] = Router(u)
+        if v not in routers:
+            routers[v] = Router(v)
+        if w == -1:
+            routers[u].neighbors.pop(v, None)
+            routers[v].neighbors.pop(u, None)
+        else:
+            routers[u].neighbors[v] = w
+            routers[v].neighbors[u] = w
+
+# ========================= main  ===================================== #
+    nodes, edges, updates = Router.parse_input()
+    routers = build_topology(nodes, edges)
+    simulate_dv(routers)
+    if updates:
+        apply_updates(routers, updates)
+        simulate_dv(routers)
