@@ -228,5 +228,6 @@ if __name__ == '__main__':
     # update
     if updates:
         apply_updates(routers, updates)
-        simulate_dv(routers, print_tables=True, init=False, start_t=t)  # 继承时间步长
+        simulate_dv(routers, print_tables=True, init=False, start_t=t + 1)  # t+1
+
 
